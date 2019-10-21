@@ -2,9 +2,12 @@ import Foundation
 
 extension FetchableRecord where Self: Decodable {
     public init(row: Row) {
-        // Intended force-try. FetchableRecord is designed for records that
-        // reliably decode from rows.
-        self = try! RowDecoder().decode(from: row)
+        do {
+            self = try RowDecoder().decode(from: row)
+        } catch {
+            // FetchableRecord is designed for records that reliably decode from rows.
+            fatalError("Failed to decode row: \(row). Error: \(error)")
+        }
     }
 }
 
