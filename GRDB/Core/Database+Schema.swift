@@ -35,24 +35,42 @@ extension Database {
     
     /// Returns whether a table is an internal SQLite table.
     ///
-    /// Those are tables whose name begins with "sqlite_".
+    /// Those are tables whose name begins with `sqlite_` and `pragma_`.
     ///
     /// For more information, see https://www.sqlite.org/fileformat2.html
-    public func isSQLiteInternalTable(_ tableName: String) -> Bool {
+    public static func isSQLiteInternalTable(_ tableName: String) -> Bool {
         // https://www.sqlite.org/fileformat2.html#internal_schema_objects
         // > The names of internal schema objects always begin with "sqlite_"
         // > and any table, index, view, or trigger whose name begins with
         // > "sqlite_" is an internal schema object. SQLite prohibits
         // > applications from creating objects whose names begin with
         // > "sqlite_".
-        return tableName.starts(with: "sqlite_")
+        tableName.starts(with: "sqlite_") || tableName.starts(with: "pragma_")
+    }
+    
+    /// Returns whether a table is an internal SQLite table.
+    ///
+    /// Those are tables whose name begins with `sqlite_` and `pragma_`.
+    ///
+    /// For more information, see https://www.sqlite.org/fileformat2.html
+    @available(*, deprecated, message: "Use Database.isSQLiteInternalTable(_:) static method instead.")
+    public func isSQLiteInternalTable(_ tableName: String) -> Bool {
+        Self.isSQLiteInternalTable(tableName)
     }
     
     /// Returns whether a table is an internal GRDB table.
     ///
     /// Those are tables whose name begins with "grdb_".
-    public func isGRDBInternalTable(_ tableName: String) -> Bool {
+    public static func isGRDBInternalTable(_ tableName: String) -> Bool {
         tableName.starts(with: "grdb_")
+    }
+    
+    /// Returns whether a table is an internal GRDB table.
+    ///
+    /// Those are tables whose name begins with "grdb_".
+    @available(*, deprecated, message: "Use Database.isGRDBInternalTable(_:) static method instead.")
+    public func isGRDBInternalTable(_ tableName: String) -> Bool {
+        Self.isGRDBInternalTable(tableName)
     }
     
     /// Returns whether a view exists.
@@ -178,35 +196,49 @@ extension Database {
             return false
         }
     }
-    /// The indexes on table named `tableName`; returns the empty array if the
-    /// table does not exist.
+    
+    /// The indexes on table named `tableName`.
     ///
-    /// Note: SQLite does not define any index for INTEGER PRIMARY KEY columns:
-    /// this method does not return any index that represents this primary key.
+    /// Only indexes on columns are returned. Indexes on expressions are
+    /// not returned.
+    ///
+    /// SQLite does not define any index for INTEGER PRIMARY KEY columns: this
+    /// method does not return any index that represents the primary key.
     ///
     /// If you want to know if a set of columns uniquely identify a row, prefer
-    /// table(_:hasUniqueKey:) instead.
+    /// `table(_:hasUniqueKey:)` instead.
     public func indexes(on tableName: String) throws -> [IndexInfo] {
         if let indexes = schemaCache.indexes(on: tableName) {
             return indexes
         }
         
         let indexes = try Row
+            // [seq:0 name:"index" unique:0 origin:"c" partial:0]
             .fetchAll(self, sql: "PRAGMA index_list(\(tableName.quotedDatabaseIdentifier))")
-            .map { row -> IndexInfo in
-                // [seq:0 name:"index" unique:0 origin:"c" partial:0]
+            .compactMap { row -> IndexInfo? in
                 let indexName: String = row[1]
                 let unique: Bool = row[2]
-                let columns = try Row
+                
+                let indexInfoRows = try Row
+                    // [seqno:0 cid:2 name:"column"]
                     .fetchAll(self, sql: "PRAGMA index_info(\(indexName.quotedDatabaseIdentifier))")
-                    .map({ row -> (Int, String) in
-                        // [seqno:0 cid:2 name:"column"]
-                        (row[0] as Int, row[2] as String)
-                    })
-                    .sorted { $0.0 < $1.0 }
-                    .map { $0.1 }
+                    // Sort by rank
+                    .sorted(by: { ($0[0] as Int) < ($1[0] as Int) })
+                var columns: [String] = []
+                for indexInfoRow in indexInfoRows {
+                    guard let column = indexInfoRow[2] as String? else {
+                        // https://sqlite.org/pragma.html#pragma_index_info
+                        // > The name of the column being indexed is NULL if the
+                        // > column is the rowid or an expression.
+                        //
+                        // IndexInfo does not support expressing such index.
+                        // Maybe in a future GRDB version?
+                        return nil
+                    }
+                    columns.append(column)
+                }
                 return IndexInfo(name: indexName, columns: columns, unique: unique)
-        }
+            }
         
         if indexes.isEmpty {
             // PRAGMA index_list doesn't throw any error when table does
@@ -225,8 +257,8 @@ extension Database {
     public func table<T: Sequence>(
         _ tableName: String,
         hasUniqueKey columns: T)
-        throws -> Bool
-        where T.Iterator.Element == String
+    throws -> Bool
+    where T.Iterator.Element == String
     {
         try columnsForUniqueKey(Array(columns), in: tableName) != nil
     }
@@ -254,9 +286,8 @@ extension Database {
                     .mapping
                     .append((origin: origin, destination: destination, seq: seq))
             } else {
-                rawForeignKeys.append((
-                    destinationTable: table,
-                    mapping: [(origin: origin, destination: destination, seq: seq)]))
+                let mapping = [(origin: origin, destination: destination, seq: seq)]
+                rawForeignKeys.append((destinationTable: table, mapping: mapping))
                 previousId = id
             }
         }
@@ -332,27 +363,54 @@ extension Database {
         // > column in the primary key for columns that are part of the primary
         // > key.
         //
-        // CREATE TABLE players (
+        // sqlite> CREATE TABLE players (
         //   id INTEGER PRIMARY KEY,
         //   firstName TEXT,
-        //   lastName TEXT)
+        //   lastName TEXT);
         //
-        // PRAGMA table_info("players")
-        //
+        // sqlite> PRAGMA table_info("players");
         // cid | name  | type    | notnull | dflt_value | pk |
         // 0   | id    | INTEGER | 0       | NULL       | 1  |
         // 1   | name  | TEXT    | 0       | NULL       | 0  |
         // 2   | score | INTEGER | 0       | NULL       | 0  |
-        
-        if sqlite3_libversion_number() < 3008005 {
-            // Work around a bug in SQLite where PRAGMA table_info would
-            // return a result even after the table was deleted.
-            if try !tableExists(tableName) {
-                throw DatabaseError(message: "no such table: \(tableName)")
+        //
+        //
+        // PRAGMA table_info does not expose hidden and generated columns. For
+        // that, we need PRAGMA table_xinfo, introduced in SQLite 3.26.0:
+        // https://sqlite.org/releaselog/3_26_0.html
+        //
+        // > PRAGMA schema.table_xinfo(table-name);
+        //
+        // > This pragma returns one row for each column in the named table,
+        // > including hidden columns in virtual tables. The output is the same
+        // > as for PRAGMA table_info except that hidden columns are shown
+        // > rather than being omitted.
+        //
+        // sqlite> PRAGMA table_xinfo("players");
+        // cid | name      | type    | notnull | dflt_value | pk | hidden
+        // 0   | id        | INTEGER | 0       | NULL       | 1  | 0
+        // 1   | firstName | TEXT    | 0       | NULL       | 0  | 0
+        // 2   | lastName  | TEXT    | 0       | NULL       | 0  | 0
+        let columnInfoQuery: String
+        if sqlite3_libversion_number() < 3026000 {
+            if sqlite3_libversion_number() < 3008005 {
+                // Work around a bug in SQLite where PRAGMA table_info would
+                // return a result even after the table was deleted.
+                if try !tableExists(tableName) {
+                    throw DatabaseError(message: "no such table: \(tableName)")
+                }
             }
+            columnInfoQuery = "PRAGMA table_info(\(tableName.quotedDatabaseIdentifier))"
+        } else {
+            // For our purposes, we look for generated columns, not hidden
+            // columns. The "hidden" column magic numbers come from the SQLite
+            // source code. The values 2 and 3 refer to virtual and stored
+            // generated columns, respectively. Search for COLFLAG_VIRTUAL in
+            // https://www.sqlite.org/cgi/src/file?name=src/pragma.c&ci=fca8dc8b578f215a
+            columnInfoQuery = "SELECT * FROM pragma_table_xinfo('\(tableName)') WHERE hidden IN (0,2,3)"
         }
         let columns = try ColumnInfo
-            .fetchAll(self, sql: "PRAGMA table_info(\(tableName.quotedDatabaseIdentifier))")
+            .fetchAll(self, sql: columnInfoQuery)
             .sorted(by: { $0.cid < $1.cid })
         if columns.isEmpty {
             throw DatabaseError(message: "no such table: \(tableName)")
@@ -368,8 +426,8 @@ extension Database {
     func columnsForUniqueKey<T: Sequence>(
         _ columns: T,
         in tableName: String)
-        throws -> [String]?
-        where T.Iterator.Element == String
+    throws -> [String]?
+    where T.Iterator.Element == String
     {
         let lowercasedColumns = Set(columns.map { $0.lowercased() })
         if lowercasedColumns.isEmpty {

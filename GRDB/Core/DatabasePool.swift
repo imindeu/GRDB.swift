@@ -369,7 +369,7 @@ extension DatabasePool: DatabaseReader {
                 } catch {
                     block(.failure(error))
                 }
-        }
+            }
     }
     
     /// :nodoc:
@@ -414,7 +414,7 @@ extension DatabasePool: DatabaseReader {
                 } catch {
                     block(.failure(error))
                 }
-        }
+            }
     }
     
     /// Synchronously executes a read-only block in a protected dispatch queue,
@@ -748,7 +748,7 @@ extension DatabasePool: DatabaseReader {
     public func writeInTransaction(
         _ kind: Database.TransactionKind? = nil,
         _ updates: (Database) throws -> Database.TransactionCompletion)
-        throws
+    throws
     {
         try writer.sync { db in
             try db.inTransaction(kind) {
@@ -793,7 +793,7 @@ extension DatabasePool: DatabaseReader {
         observation: ValueObservation<Reducer>,
         scheduling scheduler: ValueObservationScheduler,
         onChange: @escaping (Reducer.Value) -> Void)
-        -> DatabaseCancellable
+    -> DatabaseCancellable
     {
         if configuration.readonly {
             return _addReadOnly(
@@ -823,7 +823,7 @@ extension DatabasePool: DatabaseReader {
         observation: ValueObservation<Reducer>,
         scheduling scheduler: ValueObservationScheduler,
         onChange: @escaping (Reducer.Value) -> Void)
-        -> ValueObserver<Reducer> // For testability
+    -> ValueObserver<Reducer> // For testability
     {
         assert(!configuration.readonly, "Use _addReadOnly(observation:) instead")
         assert(!observation.requiresWriteAccess, "Use _addWriteOnly(observation:) instead")
@@ -874,6 +874,7 @@ extension DatabasePool: DatabaseReader {
         //
         // 3. Install the transaction observer.
         
+        #if SQLITE_ENABLE_SNAPSHOT
         if scheduler.immediateInitialValue() {
             do {
                 let initialSnapshot = try makeSnapshot()
@@ -902,12 +903,38 @@ extension DatabasePool: DatabaseReader {
                     } catch {
                         observer.notifyErrorAndComplete(error)
                     }
+                }
+        }
+        #else
+        if scheduler.immediateInitialValue() {
+            do {
+                let initialValue = try read(observer.fetchInitialValue)
+                onChange(initialValue)
+                addObserver(observer: observer)
+            } catch {
+                observer.complete()
+                observation.events.didFail?(error)
+            }
+        } else {
+            _weakAsyncRead { [weak self] dbResult in
+                guard let self = self, let dbResult = dbResult else { return }
+                if observer.isCompleted { return }
+                
+                do {
+                    let initialValue = try observer.fetchInitialValue(dbResult.get())
+                    observer.notifyChange(initialValue)
+                    self.addObserver(observer: observer)
+                } catch {
+                    observer.notifyErrorAndComplete(error)
+                }
             }
         }
+        #endif
         
         return observer
     }
     
+    #if SQLITE_ENABLE_SNAPSHOT
     // Support for _addConcurrent(observation:)
     private func add<Reducer: ValueReducer>(
         observer: ValueObserver<Reducer>,
@@ -924,20 +951,11 @@ extension DatabasePool: DatabaseReader {
                     // database versions. It prevents database checkpointing,
                     // and keeps versions (`sqlite3_snapshot`) valid
                     // and comparable.
-                    let fetchNeeded: Bool = withExtendedLifetime(initialSnapshot) {
-                        // Version is nil if SQLite is not compiled with
-                        // SQLITE_ENABLE_SNAPSHOT, or if the DatabaseSnaphot
-                        // could not grab its version. In this case, we don't
-                        // care, and just fetch a fresh value.
+                    let fetchNeeded: Bool = try withExtendedLifetime(initialSnapshot) {
                         guard let initialVersion = initialSnapshot.version else {
                             return true
                         }
-                        do {
-                            return try db.wasChanged(since: initialVersion)
-                        } catch {
-                            // ignore: we'll just re-fetch
-                            return true
-                        }
+                        return try db.wasChanged(since: initialVersion)
                     }
                     
                     if fetchNeeded {
@@ -956,6 +974,27 @@ extension DatabasePool: DatabaseReader {
             }
         }
     }
+    #else
+    // Support for _addConcurrent(observation:)
+    private func addObserver<Reducer: ValueReducer>(observer: ValueObserver<Reducer>) {
+        _weakAsyncWriteWithoutTransaction { db in
+            guard let db = db else { return }
+            if observer.isCompleted { return }
+            
+            do {
+                observer.events.databaseDidChange?()
+                if let value = try observer.fetchValue(db) {
+                    observer.notifyChange(value)
+                }
+                
+                // Now we can start observation
+                db.add(transactionObserver: observer, extent: .observerLifetime)
+            } catch {
+                observer.notifyErrorAndComplete(error)
+            }
+        }
+    }
+    #endif
 }
 
 extension DatabasePool {

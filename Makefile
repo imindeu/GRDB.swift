@@ -48,8 +48,23 @@ endif
 # xcodebuild actions to run test targets
 TEST_ACTIONS = clean build build-for-testing test-without-building
 
-# When adding support for an Xcode version, look for available devices with `instruments -s devices`
-ifeq ($(XCODEVERSION),12.0)
+# When adding support for an Xcode version, look for available devices with
+# `xcrun xctrace list devices` (or the deprecated `instruments -s devices`).
+ifeq ($(XCODEVERSION),12.3)
+  MAX_SWIFT_VERSION = 5.3
+  MIN_SWIFT_VERSION = 5.2
+  MAX_IOS_DESTINATION = "platform=iOS Simulator,name=iPhone 12,OS=14.3"
+  MIN_IOS_DESTINATION = "platform=iOS Simulator,name=iPhone 5s,OS=10.3.1"
+  MAX_TVOS_DESTINATION = "platform=tvOS Simulator,name=Apple TV 4K,OS=14.3"
+  MIN_TVOS_DESTINATION = "platform=tvOS Simulator,name=Apple TV,OS=10.2"
+else ifeq ($(XCODEVERSION),12.2)
+  MAX_SWIFT_VERSION = 5.3
+  MIN_SWIFT_VERSION = 5.2
+  MAX_IOS_DESTINATION = "platform=iOS Simulator,name=iPhone 12,OS=14.2"
+  MIN_IOS_DESTINATION = "platform=iOS Simulator,name=iPhone 5s,OS=10.3.1"
+  MAX_TVOS_DESTINATION = "platform=tvOS Simulator,name=Apple TV 4K,OS=14.2"
+  MIN_TVOS_DESTINATION = "platform=tvOS Simulator,name=Apple TV,OS=10.2"
+else ifeq ($(XCODEVERSION),12.0)
   MAX_SWIFT_VERSION = 5.3
   MIN_SWIFT_VERSION = 5.2
   MAX_IOS_DESTINATION = "platform=iOS Simulator,name=iPhone 11,OS=14.0"
@@ -129,7 +144,7 @@ test_framework_GRDBOSX_maxSwift:
 	  -scheme GRDBOSX \
 	  SWIFT_VERSION=$(MAX_SWIFT_VERSION) \
 	  'OTHER_SWIFT_FLAGS=$(inherited) -D SQLITE_ENABLE_FTS5 -D SQLITE_ENABLE_PREUPDATE_HOOK' \
-	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1 GRDB_SQLITE_ENABLE_SNAPSHOT=1' \
+	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1' \
 	  $(TEST_ACTIONS) \
 	  $(XCPRETTY)
 
@@ -140,7 +155,7 @@ ifdef MIN_SWIFT_VERSION
 	  -scheme GRDBOSX \
 	  SWIFT_VERSION=$(MIN_SWIFT_VERSION) \
 	  'OTHER_SWIFT_FLAGS=$(inherited) -D SQLITE_ENABLE_FTS5 -D SQLITE_ENABLE_PREUPDATE_HOOK' \
-	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1 GRDB_SQLITE_ENABLE_SNAPSHOT=1' \
+	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1' \
 	  $(TEST_ACTIONS) \
 	  $(XCPRETTY)
 endif
@@ -164,7 +179,7 @@ test_framework_GRDBiOS_maxTarget_maxSwift:
 	  -destination $(MAX_IOS_DESTINATION) \
 	  SWIFT_VERSION=$(MAX_SWIFT_VERSION) \
 	  'OTHER_SWIFT_FLAGS=$(inherited) -D SQLITE_ENABLE_FTS5 -D SQLITE_ENABLE_PREUPDATE_HOOK' \
-	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1 GRDB_SQLITE_ENABLE_SNAPSHOT=1' \
+	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1' \
 	  $(TEST_ACTIONS) \
 	  $(XCPRETTY)
 
@@ -176,7 +191,7 @@ ifdef MIN_SWIFT_VERSION
 	  -destination $(MAX_IOS_DESTINATION) \
 	  SWIFT_VERSION=$(MIN_SWIFT_VERSION) \
 	  'OTHER_SWIFT_FLAGS=$(inherited) -D SQLITE_ENABLE_FTS5 -D SQLITE_ENABLE_PREUPDATE_HOOK' \
-	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1 GRDB_SQLITE_ENABLE_SNAPSHOT=1' \
+	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1' \
 	  $(TEST_ACTIONS) \
 	  $(XCPRETTY)
 endif
@@ -200,7 +215,7 @@ test_framework_GRDBtvOS_maxTarget_maxSwift:
 	  -destination $(MAX_TVOS_DESTINATION) \
 	  SWIFT_VERSION=$(MAX_SWIFT_VERSION) \
 	  'OTHER_SWIFT_FLAGS=$(inherited) -D SQLITE_ENABLE_FTS5 -D SQLITE_ENABLE_PREUPDATE_HOOK' \
-	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1 GRDB_SQLITE_ENABLE_SNAPSHOT=1' \
+	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1' \
 	  $(TEST_ACTIONS) \
 	  $(XCPRETTY)
 
@@ -212,7 +227,7 @@ ifdef MIN_SWIFT_VERSION
 	  -destination $(MAX_TVOS_DESTINATION) \
 	  SWIFT_VERSION=$(MIN_SWIFT_VERSION) \
 	  'OTHER_SWIFT_FLAGS=$(inherited) -D SQLITE_ENABLE_FTS5 -D SQLITE_ENABLE_PREUPDATE_HOOK' \
-	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1 GRDB_SQLITE_ENABLE_SNAPSHOT=1' \
+	  'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) GRDB_SQLITE_ENABLE_PREUPDATE_HOOK=1' \
 	  $(TEST_ACTIONS) \
 	  $(XCPRETTY)
 endif
@@ -388,10 +403,11 @@ SQLiteCustom: SQLiteCustom/src/sqlite3.h
 	echo '/* Makefile generated */' > SQLiteCustom/GRDBCustomSQLite-USER.h
 	echo '#define SQLITE_ENABLE_PREUPDATE_HOOK' >> SQLiteCustom/GRDBCustomSQLite-USER.h
 	echo '#define SQLITE_ENABLE_FTS5' >> SQLiteCustom/GRDBCustomSQLite-USER.h
+	echo '#define SQLITE_ENABLE_SNAPSHOT' >> SQLiteCustom/GRDBCustomSQLite-USER.h
 	echo '// Makefile generated' > SQLiteCustom/GRDBCustomSQLite-USER.xcconfig
-	echo 'CUSTOM_OTHER_SWIFT_FLAGS = -D SQLITE_ENABLE_PREUPDATE_HOOK -D SQLITE_ENABLE_FTS5' >> SQLiteCustom/GRDBCustomSQLite-USER.xcconfig
+	echo 'CUSTOM_OTHER_SWIFT_FLAGS = -D SQLITE_ENABLE_PREUPDATE_HOOK -D SQLITE_ENABLE_FTS5 -D SQLITE_ENABLE_SNAPSHOT' >> SQLiteCustom/GRDBCustomSQLite-USER.xcconfig
 	echo '// Makefile generated' > SQLiteCustom/src/SQLiteLib-USER.xcconfig
-	echo 'CUSTOM_SQLLIBRARY_CFLAGS = -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5' >> SQLiteCustom/src/SQLiteLib-USER.xcconfig
+	echo 'CUSTOM_SQLLIBRARY_CFLAGS = -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_SNAPSHOT' >> SQLiteCustom/src/SQLiteLib-USER.xcconfig
 
 # Makes sure the SQLiteCustom/src submodule has been downloaded
 SQLiteCustom/src/sqlite3.h:
@@ -408,10 +424,10 @@ ifdef JAZZY
 	  --author 'Gwendal Roué' \
 	  --author_url https://github.com/groue \
 	  --github_url https://github.com/groue/GRDB.swift \
-	  --github-file-prefix https://github.com/groue/GRDB.swift/tree/v5.0.0 \
-	  --module-version 5.0.0 \
+	  --github-file-prefix https://github.com/groue/GRDB.swift/tree/v5.3.0 \
+	  --module-version 5.3.0 \
 	  --module GRDB \
-	  --root-url http://groue.github.io/GRDB.swift/docs/5.0/ \
+	  --root-url http://groue.github.io/GRDB.swift/docs/5.3/ \
 	  --output Documentation/Reference \
 	  --xcodebuild-arguments -project,GRDB.xcodeproj,-scheme,GRDBiOS
 else

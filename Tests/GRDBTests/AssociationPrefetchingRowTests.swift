@@ -118,7 +118,7 @@ class AssociationPrefetchingRowTests: GRDBTestCase {
             // Request with avoided prefetch
             do {
                 let request = A
-                    .filter(false)
+                    .none()
                     .including(all: A
                         .hasMany(B.self)
                         .orderByPrimaryKey())
@@ -258,7 +258,7 @@ class AssociationPrefetchingRowTests: GRDBTestCase {
                 let request = A
                     .including(all: A
                         .hasMany(C.self)
-                        .filter(false)
+                        .none()
                         .including(all: C
                             .hasMany(D.self)
                             .orderByPrimaryKey())
@@ -466,7 +466,7 @@ class AssociationPrefetchingRowTests: GRDBTestCase {
                 let request = A
                     .including(all: A
                         .hasMany(C.self)
-                        .filter(false)
+                        .none()
                         .including(required: C
                             .hasMany(D.self)
                             .orderByPrimaryKey())
@@ -1136,6 +1136,55 @@ class AssociationPrefetchingRowTests: GRDBTestCase {
                 ["colb1": 4, "colb2": 1, "colb3": "b1", "grdb_colb2": 1],
                 ["colb1": 5, "colb2": 1, "colb3": "b2", "grdb_colb2": 1]])
             XCTAssertEqual(row3.prefetchedRows["bs"], [])
+        }
+    }
+    
+    // Regression test for https://github.com/groue/GRDB.swift/issues/871
+    func testCompoundColumnLimit() throws {
+        struct Parent: Encodable, PersistableRecord {
+            let a: Int
+            let b: Int
+            static let children = hasMany(Child.self)
+        }
+
+        struct Child: Encodable, PersistableRecord {
+            let a: Int
+            let b: Int
+        }
+
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "parent") { t in
+                t.column("a", .integer).notNull()
+                t.column("b", .integer).notNull()
+                t.primaryKey(["a", "b"])
+            }
+            
+            try db.create(table: "child") { t in
+                t.column("a", .integer).notNull()
+                t.column("b", .integer).notNull()
+                t.foreignKey(["a", "b"], references: "parent")
+            }
+            
+            let count = Int(sqlite3_limit(db.sqliteConnection, SQLITE_LIMIT_EXPR_DEPTH, -1))
+            for index in 0..<count {
+                try Parent(a: index, b: 1).insert(db)
+                try Child(a: index, b: 1).insert(db)
+            }
+            
+            let request = Parent
+                .including(all: Parent.children)
+                .asRequest(of: Row.self)
+            
+            let rows = try request.fetchAll(db)
+            for (index, row) in rows.enumerated() {
+                XCTAssertEqual(row.unscoped, ["a": index, "b": 1])
+                XCTAssertEqual(row.prefetchedRows.keys, ["children"])
+                XCTAssertEqual(row.prefetchedRows["children"]!.count, 1)
+                XCTAssertEqual(
+                    row.prefetchedRows["children"]![0],
+                    ["a": index, "b": 1, "grdb_a": index, "grdb_b": 1])
+            }
         }
     }
 }

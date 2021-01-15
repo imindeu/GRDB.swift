@@ -4,7 +4,7 @@ extension TableRecord {
     
     static var relationForAll: SQLRelation {
         SQLRelation(
-            source: .table(tableName: databaseTableName, alias: nil),
+            source: SQLSource(tableName: databaseTableName, alias: nil),
             selectionPromise: DatabasePromise(value: databaseSelection))
     }
     
@@ -48,7 +48,7 @@ extension TableRecord {
     public static func select(
         sql: String,
         arguments: StatementArguments = StatementArguments())
-        -> QueryInterfaceRequest<Self>
+    -> QueryInterfaceRequest<Self>
     {
         select(literal: SQLLiteral(sql: sql, arguments: arguments))
     }
@@ -72,7 +72,7 @@ extension TableRecord {
     public static func select<RowDecoder>(
         _ selection: [SQLSelectable],
         as type: RowDecoder.Type = RowDecoder.self)
-        -> QueryInterfaceRequest<RowDecoder>
+    -> QueryInterfaceRequest<RowDecoder>
     {
         all().select(selection, as: type)
     }
@@ -88,7 +88,7 @@ extension TableRecord {
     public static func select<RowDecoder>(
         _ selection: SQLSelectable...,
         as type: RowDecoder.Type = RowDecoder.self)
-        -> QueryInterfaceRequest<RowDecoder>
+    -> QueryInterfaceRequest<RowDecoder>
     {
         all().select(selection, as: type)
     }
@@ -105,7 +105,7 @@ extension TableRecord {
         sql: String,
         arguments: StatementArguments = StatementArguments(),
         as type: RowDecoder.Type = RowDecoder.self)
-        -> QueryInterfaceRequest<RowDecoder>
+    -> QueryInterfaceRequest<RowDecoder>
     {
         all().select(literal: SQLLiteral(sql: sql, arguments: arguments), as: type)
     }
@@ -121,7 +121,7 @@ extension TableRecord {
     public static func select<RowDecoder>(
         literal sqlLiteral: SQLLiteral,
         as type: RowDecoder.Type = RowDecoder.self)
-        -> QueryInterfaceRequest<RowDecoder>
+    -> QueryInterfaceRequest<RowDecoder>
     {
         all().select(literal: sqlLiteral, as: type)
     }
@@ -154,7 +154,23 @@ extension TableRecord {
     /// The selection defaults to all columns. This default can be changed for
     /// all requests by the `TableRecord.databaseSelection` property, or
     /// for individual requests with the `TableRecord.select` method.
+    @available(*, deprecated, message: "Did you mean filter(key: id)? If not, prefer filter(value.databaseValue) instead. See also all() and none().") // swiftlint:disable:this line_length
     public static func filter(_ predicate: SQLExpressible) -> QueryInterfaceRequest<Self> {
+        all().filter(predicate.sqlExpression)
+    }
+    
+    // Accept SQLSpecificExpressible instead of SQLExpressible, so that we
+    // prevent the `Player.filter(42)` misuse.
+    // See https://github.com/groue/GRDB.swift/pull/864
+    /// Creates a request with the provided *predicate*.
+    ///
+    ///     // SELECT * FROM player WHERE email = 'arthur@example.com'
+    ///     let request = Player.filter(Column("email") == "arthur@example.com")
+    ///
+    /// The selection defaults to all columns. This default can be changed for
+    /// all requests by the `TableRecord.databaseSelection` property, or
+    /// for individual requests with the `TableRecord.select` method.
+    public static func filter(_ predicate: SQLSpecificExpressible) -> QueryInterfaceRequest<Self> {
         all().filter(predicate)
     }
     
@@ -167,8 +183,8 @@ extension TableRecord {
     /// all requests by the `TableRecord.databaseSelection` property, or
     /// for individual requests with the `TableRecord.select` method.
     public static func filter<PrimaryKeyType>(key: PrimaryKeyType?)
-        -> QueryInterfaceRequest<Self>
-        where PrimaryKeyType: DatabaseValueConvertible
+    -> QueryInterfaceRequest<Self>
+    where PrimaryKeyType: DatabaseValueConvertible
     {
         all().filter(key: key)
     }
@@ -182,8 +198,8 @@ extension TableRecord {
     /// all requests by the `TableRecord.databaseSelection` property, or
     /// for individual requests with the `TableRecord.select` method.
     public static func filter<Sequence>(keys: Sequence)
-        -> QueryInterfaceRequest<Self>
-        where Sequence: Swift.Sequence, Sequence.Element: DatabaseValueConvertible
+    -> QueryInterfaceRequest<Self>
+    where Sequence: Swift.Sequence, Sequence.Element: DatabaseValueConvertible
     {
         all().filter(keys: keys)
     }
@@ -229,7 +245,7 @@ extension TableRecord {
     public static func filter(
         sql: String,
         arguments: StatementArguments = StatementArguments())
-        -> QueryInterfaceRequest<Self>
+    -> QueryInterfaceRequest<Self>
     {
         filter(literal: SQLLiteral(sql: sql, arguments: arguments))
     }
@@ -304,7 +320,7 @@ extension TableRecord {
     public static func order(
         sql: String,
         arguments: StatementArguments = StatementArguments())
-        -> QueryInterfaceRequest<Self>
+    -> QueryInterfaceRequest<Self>
     {
         all().order(literal: SQLLiteral(sql: sql, arguments: arguments))
     }

@@ -268,7 +268,7 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
                     let db = Unmanaged<Database>.fromOpaque(dbPointer!).takeUnretainedValue()
                     let callback = db.busyCallback!
                     return callback(Int(numberOfTries)) ? 1 : 0
-            },
+                },
                 dbPointer)
         }
     }
@@ -311,7 +311,7 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
                     return SQLITE_OK
                 }
                 return authorizer.authorize(actionCode, cString1, cString2, cString3, cString4)
-        },
+            },
             dbPointer)
     }
     
@@ -355,7 +355,10 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
     /// This method must be called before database deallocation
     func close() {
         SchedulingWatchdog.preconditionValidQueue(self)
-        assert(!isClosed)
+        
+        if isClosed {
+            return
+        }
         
         configuration.SQLiteConnectionWillClose?(sqliteConnection)
         internalStatementCache.clear()
@@ -399,7 +402,7 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
     public var maximumStatementArgumentCount: Int {
         Int(sqlite3_limit(sqliteConnection, SQLITE_LIMIT_VARIABLE_NUMBER, -1))
     }
-
+    
     // MARK: - Functions
     
     /// Add or redefine an SQL function.
@@ -443,7 +446,7 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
             { (collationPointer, length1, buffer1, length2, buffer2) -> Int32 in
                 let collation = Unmanaged<DatabaseCollation>.fromOpaque(collationPointer!).takeUnretainedValue()
                 return Int32(collation.function(length1, buffer1, length2, buffer2).rawValue)
-        }, nil)
+            }, nil)
         guard code == SQLITE_OK else {
             // Assume a GRDB bug: there is no point throwing any error.
             fatalError(DatabaseError(resultCode: code, message: lastErrorMessage).description)
@@ -488,18 +491,17 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
     
     // MARK: - Snapshots
     
-    /// Returns a snapshot that must be freed with `grdb_snapshot_free`.
-    /// 
+    #if SQLITE_ENABLE_SNAPSHOT
+    /// Returns a snapshot that must be freed with `sqlite3_snapshot_free`.
+    ///
     /// See https://www.sqlite.org/c3ref/snapshot.html
     func takeVersionSnapshot() throws -> UnsafeMutablePointer<sqlite3_snapshot> {
         var snapshot: UnsafeMutablePointer<sqlite3_snapshot>?
         let code = withUnsafeMutablePointer(to: &snapshot) {
-            grdb_snapshot_get(sqliteConnection, "main", $0)
+            sqlite3_snapshot_get(sqliteConnection, "main", $0)
         }
         guard code == SQLITE_OK else {
-            // Don't grab `lastErrorMessage`, because grdb_snapshot_get may be a
-            // shim that does not call the missing sqlite3_snapshot_get.
-            throw DatabaseError(resultCode: code)
+            throw DatabaseError(resultCode: code, message: lastErrorMessage)
         }
         if let snapshot = snapshot {
             return snapshot
@@ -511,12 +513,13 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
     func wasChanged(since initialSnapshot: UnsafeMutablePointer<sqlite3_snapshot>) throws -> Bool {
         let secondSnapshot = try takeVersionSnapshot()
         defer {
-            grdb_snapshot_free(secondSnapshot)
+            sqlite3_snapshot_free(secondSnapshot)
         }
-        let cmp = grdb_snapshot_cmp(initialSnapshot, secondSnapshot)
+        let cmp = sqlite3_snapshot_cmp(initialSnapshot, secondSnapshot)
         assert(cmp <= 0, "Unexpected snapshot ordering")
         return cmp < 0
     }
+    #endif
     
     // MARK: - Authorizer
     
@@ -645,18 +648,20 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
         switch mask {
         case SQLITE_TRACE_STMT:
             if let sqliteStatement = p, let unexpandedSQL = x {
-                let statement = TraceEvent.Statement(impl: .trace_v2(
-                    sqliteStatement: OpaquePointer(sqliteStatement),
-                    unexpandedSQL: UnsafePointer(unexpandedSQL.assumingMemoryBound(to: CChar.self)),
-                    sqlite3_expanded_sql: sqlite3_expanded_sql))
+                let statement = TraceEvent.Statement(
+                    impl: .trace_v2(
+                        sqliteStatement: OpaquePointer(sqliteStatement),
+                        unexpandedSQL: UnsafePointer(unexpandedSQL.assumingMemoryBound(to: CChar.self)),
+                        sqlite3_expanded_sql: sqlite3_expanded_sql))
                 trace(TraceEvent.statement(statement))
             }
         case SQLITE_TRACE_PROFILE:
             if let sqliteStatement = p, let durationP = x?.assumingMemoryBound(to: Int64.self) {
-                let statement = TraceEvent.Statement(impl: .trace_v2(
-                    sqliteStatement: OpaquePointer(sqliteStatement),
-                    unexpandedSQL: nil,
-                    sqlite3_expanded_sql: sqlite3_expanded_sql))
+                let statement = TraceEvent.Statement(
+                    impl: .trace_v2(
+                        sqliteStatement: OpaquePointer(sqliteStatement),
+                        unexpandedSQL: nil,
+                        sqlite3_expanded_sql: sqlite3_expanded_sql))
                 let duration = TimeInterval(durationP.pointee) / 1.0e9
                 
                 #if GRDBCUSTOMSQLITE || GRDBCIPHER || os(iOS)
@@ -689,7 +694,7 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
     ///       in the log file
     @discardableResult
     public func checkpoint(_ kind: Database.CheckpointMode = .passive, on dbName: String? = "main") throws
-        -> (walFrameCount: Int, checkpointedFrameCount: Int)
+    -> (walFrameCount: Int, checkpointedFrameCount: Int)
     {
         SchedulingWatchdog.preconditionValidQueue(self)
         var walFrameCount: CInt = -1
@@ -811,9 +816,8 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
                 return
             }
             
-            if
-                let updateStatement = statement as? UpdateStatement,
-                updateStatement.releasesDatabaseLock
+            if let updateStatement = statement as? UpdateStatement,
+               updateStatement.releasesDatabaseLock
             {
                 // Accept statements that release locks:
                 // - COMMIT
@@ -860,7 +864,7 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
     func checkForAbortedTransaction(
         sql: @autoclosure () -> String? = nil,
         arguments: @autoclosure () -> StatementArguments? = nil)
-        throws
+    throws
     {
         if isInsideTransactionBlock && !isInsideTransaction {
             throw DatabaseError(
@@ -1161,13 +1165,13 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
                     }
                     return .commit
                 }
-        },
+            },
             finally: {
                 // Restore foreign keys if needed
                 if foreignKeysEnabled {
                     try execute(sql: "PRAGMA foreign_keys = ON")
                 }
-        })
+            })
         #else
         try DatabaseQueue().backup(to: self)
         #endif
@@ -1179,7 +1183,7 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
         to dbDest: Database,
         afterBackupInit: (() -> Void)? = nil,
         afterBackupStep: (() -> Void)? = nil)
-        throws
+    throws
     {
         guard let backup = sqlite3_backup_init(dbDest.sqliteConnection, "main", sqliteConnection, "main") else {
             throw DatabaseError(resultCode: dbDest.lastErrorCode, message: dbDest.lastErrorMessage)
@@ -1234,8 +1238,26 @@ extension Database {
     ///         try db.usePassphrase("secret")
     ///     }
     public func usePassphrase(_ passphrase: String) throws {
-        let data = passphrase.data(using: .utf8)!
-        let code = data.withUnsafeBytes {
+        guard var data = passphrase.data(using: .utf8) else {
+            throw DatabaseError(message: "invalid passphrase")
+        }
+        defer {
+            data.resetBytes(in: 0..<data.count)
+        }
+        try usePassphrase(data)
+    }
+
+    /// Sets the passphrase used to crypt and decrypt an SQLCipher database.
+    ///
+    /// Call this method from `Configuration.prepareDatabase`,
+    /// as in the example below:
+    ///
+    ///     var config = Configuration()
+    ///     config.prepareDatabase { db in
+    ///         try db.usePassphrase(passphraseData)
+    ///     }
+    public func usePassphrase(_ passphrase: Data) throws {
+        let code = passphrase.withUnsafeBytes {
             sqlite3_key(sqliteConnection, $0.baseAddress, Int32($0.count))
         }
         guard code == SQLITE_OK else {
@@ -1245,6 +1267,17 @@ extension Database {
     
     /// Changes the passphrase used by an SQLCipher encrypted database.
     public func changePassphrase(_ passphrase: String) throws {
+        guard var data = passphrase.data(using: .utf8) else {
+            throw DatabaseError(message: "invalid passphrase")
+        }
+        defer {
+            data.resetBytes(in: 0..<data.count)
+        }
+        try changePassphrase(data)
+    }
+
+    /// Changes the passphrase used by an SQLCipher encrypted database.
+    public func changePassphrase(_ passphrase: Data) throws {
         // FIXME: sqlite3_rekey is discouraged.
         //
         // https://github.com/ccgus/fmdb/issues/547#issuecomment-259219320
@@ -1255,8 +1288,7 @@ extension Database {
         // > schema of the original db into the new one:
         // > https://discuss.zetetic.net/t/how-to-encrypt-a-plaintext-sqlite-database-to-use-sqlcipher-and-avoid-file-is-encrypted-or-is-not-a-database-errors/
         // swiftlint:disable:previous line_length
-        let data = passphrase.data(using: .utf8)!
-        let code = data.withUnsafeBytes {
+        let code = passphrase.withUnsafeBytes {
             sqlite3_rekey(sqliteConnection, $0.baseAddress, Int32($0.count))
         }
         guard code == SQLITE_OK else {
@@ -1478,9 +1510,9 @@ extension Database {
             enum Impl {
                 case trace_v1(String)
                 case trace_v2(
-                    sqliteStatement: SQLiteStatement,
-                    unexpandedSQL: UnsafePointer<CChar>?,
-                    sqlite3_expanded_sql: @convention(c) (OpaquePointer?) -> UnsafeMutablePointer<Int8>?)
+                        sqliteStatement: SQLiteStatement,
+                        unexpandedSQL: UnsafePointer<CChar>?,
+                        sqlite3_expanded_sql: @convention(c) (OpaquePointer?) -> UnsafeMutablePointer<Int8>?)
             }
             let impl: Impl
             
